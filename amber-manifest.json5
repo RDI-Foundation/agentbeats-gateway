@@ -1,0 +1,32 @@
+{
+  manifest_version: "0.1.0",
+  program: {
+    image: "ghcr.io/rdi-foundation/agentbeats-assessment:latest",
+    entrypoint: "uv run --no-sync python src/main.py --port 8080",
+    env: {
+      GREEN_URL: "${slots.green.url}",
+      PARTICIPANTS: "${config.participants}",
+      ASSESSMENT_CONFIG: "${config.assessment_config}",
+    },
+    network: {
+      endpoints: [
+        { name: "results", port: 8080 },
+      ],
+    },
+  },
+  config_schema: {
+    type: "object",
+    properties: {
+      participants: { type: "object" },
+      assessment_config: { type: "object" },
+    },
+    required: ["participants", "assessment_config"],
+  },
+  slots: {
+    green: { kind: "a2a" },
+  },
+  provides: {
+    results: { kind: "http", endpoint: "results" },
+  },
+  exports: { results: "results" },
+}
