@@ -10,6 +10,7 @@ from a2a.client import A2ACardResolver
 
 from assessment import run_assessment
 from config import load_config
+from proxy import Proxy
 
 
 async def wait_for_agents(endpoints: list[str], timeout: int = 30) -> bool:
@@ -59,32 +60,60 @@ async def run_assessment_task(config):
     global result_data
 
     print("Waiting for agents to be ready...")
-    ready = await wait_for_agents([config.green_url])
+    a2a_urls = [url for key, url in config.service_urls.items() if not key.endswith(("_http", "_mcp"))]
+    ready = await wait_for_agents(a2a_urls)
     if not ready:
-        print("Error: Green agent not ready.")
-        result_data = {"status": "failed", "error": "Timeout: green agent not ready"}
+        result_data = {"status": "failed", "error": "Timeout: agents not ready"}
         return
 
-    # extra time for participants to become ready in Amber scenarios
-    # can be removed after healthchecks are added to Amber (or if we bind and wait for participants)
-    await asyncio.sleep(10)
     print("Starting assessment.")
 
-    result = await run_assessment(
-        config.green_url, config.participants, config.assessment_config
-    )
+    green_url = config.service_urls["green"]
+    gateway_url = config.callback_urls["green"]
+    participants = {
+        role: f"{gateway_url}/{role}"
+        for slot, role in config.participant_roles.items()
+        if slot != "green"
+    }
+
+    result = await run_assessment(green_url, participants, config.assessment_config)
     print(f"Assessment finished with status: {result['status']}")
     result_data = result
 
 
 async def main():
     config = load_config()
-    server = uvicorn.Server(
-        uvicorn.Config(result_app, host="0.0.0.0", port=config.port, log_level="info")
+    print(f"Config: {config}")
+
+    agent_routes = {
+        role: config.service_urls[slot]
+        for slot, role in config.participant_roles.items()
+        if slot in config.service_urls
+    }
+    for slot, url in config.service_urls.items():
+        if slot.endswith(("_http", "_mcp")):
+            agent_routes[slot] = url
+
+    role_to_slot = {role: slot for slot, role in config.participant_roles.items()}
+
+    proxy = Proxy(
+        agent_routes=agent_routes,
+        callback_urls=config.callback_urls,
+        role_to_slot=role_to_slot,
     )
-    server_task = asyncio.create_task(server.serve())
+
+    proxy_server = uvicorn.Server(
+        uvicorn.Config(proxy.app, host="0.0.0.0", port=config.proxy_port, log_level="info")
+    )
+    results_server = uvicorn.Server(
+        uvicorn.Config(result_app, host="0.0.0.0", port=config.results_port, log_level="info")
+    )
+
+    proxy_task = asyncio.create_task(proxy_server.serve())
+    results_task = asyncio.create_task(results_server.serve())
     _assessment_task = asyncio.create_task(run_assessment_task(config))
-    await server_task
+
+    await asyncio.gather(proxy_task, results_task)
 
 
 if __name__ == "__main__":
