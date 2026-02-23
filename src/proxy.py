@@ -72,11 +72,10 @@ class Proxy:
 
         slot = self.role_to_slot.get(name, name)
         base_callback = self.callback_urls.get(slot)
-        if not base_callback:
-            if body:
-                print(f"Warning: no callback URL for {slot}, skipping localhost URL rewrite")
-        else:
+        if base_callback:
             body = _rewrite_localhost_urls(body, f"{base_callback}/green_mcp")
+        elif body and _LOCALHOST_RE.search(body.decode()):
+            print(f"Warning: no callback URL for {slot}, skipping localhost URL rewrite")
 
         req = self.client.build_request(
             method=request.method,
