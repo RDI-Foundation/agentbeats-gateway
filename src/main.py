@@ -111,9 +111,9 @@ async def main():
 
     proxy_task = asyncio.create_task(proxy_server.serve())
     results_task = asyncio.create_task(results_server.serve())
-    _assessment_task = asyncio.create_task(run_assessment_task(config))
+    assessment_task = asyncio.create_task(run_assessment_task(config))
 
-    await asyncio.gather(proxy_task, results_task)
+    await asyncio.gather(proxy_task, results_task, assessment_task)
 
 
 if __name__ == "__main__":
