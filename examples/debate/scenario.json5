@@ -1,0 +1,63 @@
+{
+  manifest_version: "0.1.0",
+  config_schema: {
+    type: "object",
+    properties: {
+      google_api_key: { type: "string", secret: true },
+      openai_api_key: { type: "string", secret: true },
+    },
+    required: ["openai_api_key", "google_api_key"],
+    additionalProperties: false,
+  },
+  components: {
+    gateway: {
+      manifest: "../../amber-manifest.json5",
+      config: {
+        assessment_config: {
+          topic: "AI should be regulated.",
+          num_rounds: 1,
+        },
+        participant_roles: {
+          green:   "debate_judge",
+          purple1: "pro_debater",
+          purple2: "con_debater",
+        },
+        callback_urls: {
+          green:   "${bindings.green-proxy.url}",
+        },
+      },
+    },
+    green: {
+      manifest: "./debate-judge.json5",
+      config: {
+        google_api_key: "${config.google_api_key}",
+      },
+    },
+    pro_debater: {
+      manifest: "./debater.json5",
+      config: {
+        openai_api_key: "${config.openai_api_key}",
+      },
+    },
+    con_debater: {
+      manifest: "./debater.json5",
+      config: {
+        openai_api_key: "${config.openai_api_key}",
+      },
+    },
+  },
+  bindings: [
+    { to: "#gateway.green",   from: "#green.a2a" },
+    { to: "#gateway.purple1", from: "#pro_debater.a2a" },
+    { to: "#gateway.purple2", from: "#con_debater.a2a" },
+    { to: "#green.proxy",  from: "#gateway.proxy", weak: true, name: "green-proxy" },
+  ],
+  exports: { results: "#gateway.results" },
+  metadata: {
+    agentbeats_ids: {
+      "debate_judge": 1234,
+      "pro_debater": 567,
+      "con_debater": 8910,
+    }
+  }
+}
