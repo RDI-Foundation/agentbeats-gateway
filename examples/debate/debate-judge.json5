@@ -1,5 +1,9 @@
 {
   manifest_version: "0.1.0",
+  identity: {
+    name: "debate-judge",
+    version: "1.0.0"
+  },
   program: {
     image: "ghcr.io/rdi-foundation/agentbeats-tutorial-debate-judge:latest",
     entrypoint: "uv run --no-sync python scenarios/debate/judge/src/server.py --host 0.0.0.0 --port 9009",
