@@ -10,7 +10,6 @@ class Config:
     results_port: int
     service_urls: dict[str, str]        # slot name -> participant URL
     participant_roles: dict[str, str]   # slot name -> agent role name
-    callback_urls: dict[str, str]       # slot name -> gateway URL (reverse bindings)
     assessment_config: dict
 
 
@@ -33,11 +32,6 @@ def load_config() -> Config:
         raise ValueError("PARTICIPANT_ROLES is required")
     participant_roles = json.loads(participant_roles_raw)
 
-    callback_urls_raw = os.environ.get("CALLBACK_URLS")
-    if not callback_urls_raw:
-        raise ValueError("CALLBACK_URLS is required")
-    callback_urls = json.loads(callback_urls_raw)
-
     assessment_config_raw = os.environ.get("ASSESSMENT_CONFIG", "{}")
     assessment_config = json.loads(assessment_config_raw)
 
@@ -46,6 +40,5 @@ def load_config() -> Config:
         results_port=args.results_port,
         service_urls=service_urls,
         participant_roles=participant_roles,
-        callback_urls=callback_urls,
         assessment_config=assessment_config,
     )

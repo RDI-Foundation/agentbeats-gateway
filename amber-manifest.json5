@@ -5,7 +5,6 @@
     entrypoint: "uv run python src/main.py --proxy-port 8080 --results-port 8081",
     env: {
       SERVICE_URLS:      "${slots}",
-      CALLBACK_URLS:     "${config.callback_urls}",
       PARTICIPANT_ROLES: "${config.participant_roles}",
       ASSESSMENT_CONFIG: "${config.assessment_config}",
     },
@@ -21,13 +20,13 @@
     properties: {
       assessment_config: { type: "object" },
       participant_roles: { type: "object" },
-      callback_urls: { type: "object" },
     },
-    required: ["assessment_config", "participant_roles", "callback_urls"],
+    required: ["assessment_config", "participant_roles"],
+    additionalProperties: true, // Accept legacy config like callback_urls and ignore it.
   },
   slots: {
     green:      { kind: "a2a" },
-    green_mcp:  { kind: "mcp",  optional: true },
+    green_mcp:  { kind: "mcp", optional: true }, // Legacy no-op compatibility slot.
     purple1:    { kind: "a2a" },
     purple2:    { kind: "a2a", optional: true },
     purple3:    { kind: "a2a", optional: true },

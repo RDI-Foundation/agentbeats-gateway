@@ -24,7 +24,7 @@ async def wait_for_agents(endpoints: list[str], timeout: int = 30) -> bool:
                 resolver = A2ACardResolver(httpx_client=client, base_url=endpoint)
                 await resolver.get_agent_card()
                 return True
-        except Exception as e:
+        except Exception:
             # Any exception means the agent is not ready
             return False
 
@@ -56,12 +56,27 @@ async def get_result(request):
 result_app = Starlette(routes=[Route("/", get_result)])
 
 
+def get_participant_service_urls(config) -> list[str]:
+    return [
+        config.service_urls[slot]
+        for slot in config.participant_roles
+        if slot in config.service_urls
+    ]
+
+
+def get_agent_routes(config) -> dict[str, str]:
+    return {
+        role: config.service_urls[slot]
+        for slot, role in config.participant_roles.items()
+        if slot in config.service_urls
+    }
+
+
 async def run_assessment_task(config):
     global result_data
 
     print("Waiting for agents to be ready...")
-    a2a_urls = [url for key, url in config.service_urls.items() if not key.endswith(("_http", "_mcp"))]
-    ready = await wait_for_agents(a2a_urls)
+    ready = await wait_for_agents(get_participant_service_urls(config))
     if not ready:
         result_data = {"status": "failed", "error": "Timeout: agents not ready"}
         return
@@ -69,11 +84,11 @@ async def run_assessment_task(config):
     print("Starting assessment.")
 
     green_url = config.service_urls["green"]
-    gateway_url = config.callback_urls["green"]
+    gateway_url = f"http://127.0.0.1:{config.proxy_port}"
     participants = {
         role: f"{gateway_url}/{role}"
         for slot, role in config.participant_roles.items()
-        if slot != "green"
+        if slot != "green" and slot in config.service_urls
     }
 
     result = await run_assessment(green_url, participants, config.assessment_config)
@@ -85,22 +100,7 @@ async def main():
     config = load_config()
     print(f"Config: {config}")
 
-    agent_routes = {
-        role: config.service_urls[slot]
-        for slot, role in config.participant_roles.items()
-        if slot in config.service_urls
-    }
-    for slot, url in config.service_urls.items():
-        if slot.endswith(("_http", "_mcp")):
-            agent_routes[slot] = url
-
-    role_to_slot = {role: slot for slot, role in config.participant_roles.items()}
-
-    proxy = Proxy(
-        agent_routes=agent_routes,
-        callback_urls=config.callback_urls,
-        role_to_slot=role_to_slot,
-    )
+    proxy = Proxy(agent_routes=get_agent_routes(config))
 
     proxy_server = uvicorn.Server(
         uvicorn.Config(proxy.app, host="0.0.0.0", port=config.proxy_port, log_level="info")
