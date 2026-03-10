@@ -22,9 +22,6 @@
           purple1: "pro_debater",
           purple2: "con_debater",
         },
-        callback_urls: {
-          green:   "${bindings.green-proxy.url}",
-        },
       },
     },
     green: {
@@ -50,7 +47,7 @@
     { to: "#gateway.green",   from: "#green.a2a" },
     { to: "#gateway.purple1", from: "#pro_debater.a2a" },
     { to: "#gateway.purple2", from: "#con_debater.a2a" },
-    { to: "#green.proxy",  from: "#gateway.proxy", weak: true, name: "green-proxy" },
+    { to: "#green.proxy",  from: "#gateway.proxy", weak: true },
   ],
   exports: { results: "#gateway.results" },
   metadata: {
