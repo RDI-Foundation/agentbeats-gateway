@@ -1,6 +1,6 @@
-import re
 import json
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 from starlette.applications import Starlette
@@ -9,35 +9,69 @@ from starlette.responses import Response, StreamingResponse
 from starlette.routing import Route
 
 
-_LOCALHOST_RE = re.compile(r'https?://(?:localhost|127\.0\.0\.1)(:\d+)?')
+def _rewrite_local_url(url: str, route: str, gateway_base_url: str) -> str | None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "::1",
+    }:
+        return None
+
+    gateway_base = gateway_base_url.rstrip("/")
+    rewritten_path = f"/{route}{parsed.path}" if parsed.path else f"/{route}"
+    rewritten = urlparse(f"{gateway_base}{rewritten_path}")
+    return urlunparse(
+        (
+            rewritten.scheme,
+            rewritten.netloc,
+            rewritten.path,
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
 
 
-def _rewrite_agent_card(body: bytes, route: str, green_callback_url: str) -> bytes:
-    """Rewrite the agent card's url field to point back through the gateway (green's perspective)."""
+def _rewrite_agent_card(body: bytes, route: str, gateway_base_url: str) -> bytes:
+    """Rewrite loopback agent-card URLs so follow-up calls come back through the gateway."""
     try:
         card = json.loads(body)
     except json.JSONDecodeError:
         return body
-    if "url" in card:
-        card["url"] = f"{green_callback_url}/{route}"
+
+    rewritten = False
+
+    if isinstance(card.get("supportedInterfaces"), list):
+        for interface in card["supportedInterfaces"]:
+            if not isinstance(interface, dict):
+                continue
+            raw_url = interface.get("url")
+            if not isinstance(raw_url, str):
+                continue
+            updated_url = _rewrite_local_url(raw_url, route, gateway_base_url)
+            if updated_url and updated_url != raw_url:
+                interface["url"] = updated_url
+                rewritten = True
+
+    raw_url = card.get("url")
+    if isinstance(raw_url, str):
+        updated_url = _rewrite_local_url(raw_url, route, gateway_base_url)
+        if updated_url and updated_url != raw_url:
+            card["url"] = updated_url
+            rewritten = True
+
+    if not rewritten:
+        return body
+
+    card.pop("signatures", None)
     return json.dumps(card).encode()
 
 
-def _rewrite_localhost_urls(body: bytes, target_callback_url: str) -> bytes:
-    """Replace localhost URL bases in the request body with the target's callback URL."""
-    return _LOCALHOST_RE.sub(target_callback_url.rstrip("/"), body.decode()).encode()
-
-
 class Proxy:
-    def __init__(
-        self,
-        agent_routes: dict[str, str],   # route key -> upstream URL
-        callback_urls: dict[str, str],  # slot -> callback URL (includes "green")
-        role_to_slot: dict[str, str],   # role name -> slot name
-    ):
+    def __init__(self, agent_routes: dict[str, str]):  # route key -> upstream URL
         self.agent_routes = agent_routes
-        self.callback_urls = callback_urls
-        self.role_to_slot = role_to_slot
 
         @asynccontextmanager
         async def lifespan(app):
@@ -70,13 +104,6 @@ class Proxy:
 
         body = await request.body()
 
-        slot = self.role_to_slot.get(name, name)
-        base_callback = self.callback_urls.get(slot)
-        if base_callback:
-            body = _rewrite_localhost_urls(body, f"{base_callback}/green_mcp")
-        elif body and _LOCALHOST_RE.search(body.decode()):
-            print(f"Warning: no callback URL for {slot}, skipping localhost URL rewrite")
-
         req = self.client.build_request(
             method=request.method,
             url=target_url,
@@ -87,9 +114,17 @@ class Proxy:
         try:
             if path == ".well-known/agent-card.json":
                 resp = await self.client.send(req)
-                green_callback = self.callback_urls.get("green", "")
-                response_body = _rewrite_agent_card(resp.content, name, green_callback)
-                headers = {k: v for k, v in resp.headers.items() if k.lower() != "content-length"}
+                gateway_base_url = str(request.base_url).rstrip("/")
+                response_body = _rewrite_agent_card(
+                    resp.content,
+                    name,
+                    gateway_base_url,
+                )
+                headers = {
+                    k: v
+                    for k, v in resp.headers.items()
+                    if k.lower() not in {"content-length", "content-encoding"}
+                }
                 return Response(
                     content=response_body,
                     status_code=resp.status_code,
@@ -106,7 +141,11 @@ class Proxy:
             return StreamingResponse(
                 content=stream_body(),
                 status_code=resp.status_code,
-                headers=dict(resp.headers),
+                headers={
+                    k: v
+                    for k, v in resp.headers.items()
+                    if k.lower() not in {"content-length", "content-encoding"}
+                },
             )
         except httpx.ConnectError:
             return Response(f"Failed to connect to upstream: {name}", status_code=502)

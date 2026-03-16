@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 env:
@@ -24,7 +24,9 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Resolve image name
         id: image
@@ -36,7 +38,7 @@ jobs:
 
       - name: Log in to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -46,7 +48,45 @@ jobs:
         id: release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
-        run: bash ./.github/workflows/resolve-image-version.sh version-series.txt "${{ steps.image.outputs.name }}" >> "${GITHUB_OUTPUT}"
+        run: bash ./.github/workflows/resolve-release-version.sh version-series.txt "${{ steps.image.outputs.name }}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create and push release tag
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          VERSION_TAG: ${{ steps.release.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+
+          managed_tag_marker='managed-by=agentbeats-gateway-ci'
+
+          is_managed_tag() {
+            local tag=$1
+            local object_type
+
+            object_type=$(git for-each-ref --format='%(objecttype)' "refs/tags/${tag}")
+            [[ "${object_type}" == "tag" ]] || return 1
+            git for-each-ref --format='%(contents)' "refs/tags/${tag}" | grep -Fxq "${managed_tag_marker}"
+          }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          if git rev-parse -q --verify "refs/tags/${VERSION_TAG}" >/dev/null 2>&1; then
+            if ! is_managed_tag "${VERSION_TAG}"; then
+              echo "release tag already exists but is not CI-managed: ${VERSION_TAG}" >&2
+              exit 1
+            fi
+
+            if [[ "$(git rev-list -n 1 "refs/tags/${VERSION_TAG}")" != "${GITHUB_SHA}" ]]; then
+              echo "release tag already exists on a different commit: ${VERSION_TAG}" >&2
+              exit 1
+            fi
+          else
+            git tag -a "${VERSION_TAG}" -m "Release ${VERSION_TAG}" -m "${managed_tag_marker}" "${GITHUB_SHA}"
+          fi
+
+          git push origin "refs/tags/${VERSION_TAG}:refs/tags/${VERSION_TAG}"
 
       - name: Prepare image tags
         id: tags
@@ -70,7 +110,7 @@ jobs:
 
       - name: Build Docker image
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
@@ -85,6 +125,31 @@ jobs:
           cache-from: type=gha,scope=${{ env.CACHE_SCOPE }}
           cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }}
 
+      - name: Update floating release tags
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          VERSION_TAG: ${{ steps.release.outputs.version_tag }}
+          FLOATING_TAGS: ${{ steps.release.outputs.floating_tags }}
+        run: |
+          set -euo pipefail
+
+          managed_tag_marker='managed-by=agentbeats-gateway-ci'
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          IFS=, read -r -a floating_tags <<< "${FLOATING_TAGS}"
+          for tag in "${floating_tags[@]}"; do
+            [[ -n "${tag}" ]] || continue
+            git tag -fa "${tag}" -m "Release ${VERSION_TAG}" -m "${managed_tag_marker}" "${GITHUB_SHA}"
+          done
+
+          for tag in "${floating_tags[@]}"; do
+            [[ -n "${tag}" ]] || continue
+            git push origin "+refs/tags/${tag}:refs/tags/${tag}"
+          done
+
       - name: Summarize published image
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
@@ -94,4 +159,5 @@ jobs:
           echo "## Docker Image Published" >> "${GITHUB_STEP_SUMMARY}"
           echo "**Version:** \`${{ steps.release.outputs.version_tag }}\`" >> "${GITHUB_STEP_SUMMARY}"
           echo "**Floating tags:** \`${FLOATING_TAGS}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "**Git tags updated:** \`${{ steps.release.outputs.version_tag }}\`, \`${FLOATING_TAGS}\`" >> "${GITHUB_STEP_SUMMARY}"
           echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> "${GITHUB_STEP_SUMMARY}"
