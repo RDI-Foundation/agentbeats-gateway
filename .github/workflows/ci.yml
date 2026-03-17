@@ -12,6 +12,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  manifest-image:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Verify Amber manifest image tag
+        run: bash ./.github/workflows/check-manifest-image.sh amber-manifest.json5 version-series.txt
+
   test:
     runs-on: ubuntu-latest
 

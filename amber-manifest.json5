@@ -1,7 +1,7 @@
 {
   manifest_version: "0.1.0",
   program: {
-    image: "ghcr.io/rdi-foundation/agentbeats-gateway:v0.1",
+    image: "ghcr.io/rdi-foundation/agentbeats-gateway:v0.3",
     entrypoint: "uv run python src/main.py --proxy-port 8080 --results-port 8081",
     env: {
       SERVICE_URLS:      "${slots}",

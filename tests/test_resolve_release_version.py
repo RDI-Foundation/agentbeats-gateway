@@ -10,6 +10,12 @@ SCRIPT = (
     / "workflows"
     / "resolve-release-version.sh"
 )
+CHECK_MANIFEST_SCRIPT = (
+    Path(__file__).resolve().parents[1]
+    / ".github"
+    / "workflows"
+    / "check-manifest-image.sh"
+)
 MANAGED_TAG_MARKER = "managed-by=agentbeats-gateway-ci"
 IMAGE_REF = "ghcr.io/example/agentbeats-gateway"
 
@@ -46,7 +52,7 @@ def parse_github_output(output: str) -> dict[str, str | list[str]]:
     return parsed
 
 
-class ResolveReleaseVersionTests(unittest.TestCase):
+class ReleaseScriptRepoTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.repo = Path(self.tempdir.name)
@@ -88,6 +94,9 @@ class ResolveReleaseVersionTests(unittest.TestCase):
             ],
             self.repo,
         )
+
+
+class ResolveReleaseVersionTests(ReleaseScriptRepoTestCase):
 
     def resolve(self, series: str) -> dict[str, str | list[str]]:
         (self.repo / "version-series.txt").write_text(f"{series}\n", encoding="utf-8")
@@ -153,6 +162,73 @@ class ResolveReleaseVersionTests(unittest.TestCase):
             resolved["image_tags"],
             [f"{IMAGE_REF}:v1.2.3-beta.1", f"{IMAGE_REF}:v1.2.3-beta"],
         )
+
+
+class CheckManifestImageTests(ReleaseScriptRepoTestCase):
+    def check_manifest(self, series: str, image_ref: str) -> subprocess.CompletedProcess[str]:
+        (self.repo / "version-series.txt").write_text(f"{series}\n", encoding="utf-8")
+        (self.repo / "amber-manifest.json5").write_text(
+            "{\n"
+            "  program: {\n"
+            f'    image: "{image_ref}",\n'
+            "  },\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        return subprocess.run(
+            [
+                "bash",
+                str(CHECK_MANIFEST_SCRIPT),
+                "amber-manifest.json5",
+                "version-series.txt",
+            ],
+            cwd=self.repo,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_accepts_manifest_using_expected_floating_tag(self) -> None:
+        self.commit("initial")
+
+        completed = self.check_manifest("0.3.x", f"{IMAGE_REF}:v0.3")
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn(
+            f"amber manifest image tag matches version-series.txt: {IMAGE_REF}:v0.3",
+            completed.stdout,
+        )
+
+    def test_rejects_stale_manifest_image_tag(self) -> None:
+        self.commit("initial")
+
+        completed = self.check_manifest("0.3.x", f"{IMAGE_REF}:v0.1")
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn(
+            "amber manifest image tag does not match version-series.txt",
+            completed.stderr,
+        )
+        self.assertIn(f"program.image: {IMAGE_REF}:v0.1", completed.stderr)
+        self.assertIn("expected floating tag: v0.3", completed.stderr)
+
+    def test_rejects_broader_major_tag_when_series_has_specific_minor_tag(self) -> None:
+        self.commit("initial")
+
+        completed = self.check_manifest("1.2.x", f"{IMAGE_REF}:v1")
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("expected floating tag: v1.2", completed.stderr)
+
+    def test_rejects_digest_only_manifest_image(self) -> None:
+        self.commit("initial")
+
+        completed = self.check_manifest(
+            "0.3.x",
+            f"{IMAGE_REF}@sha256:0123456789abcdef",
+        )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("must use a tagged image reference", completed.stderr)
 
 
 if __name__ == "__main__":

@@ -28,6 +28,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify Amber manifest image tag
+        run: bash ./.github/workflows/check-manifest-image.sh amber-manifest.json5 version-series.txt
+
       - name: Resolve image name
         id: image
         shell: bash
